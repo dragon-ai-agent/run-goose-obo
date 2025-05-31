@@ -160,7 +160,10 @@ runs:
     - name: Install uv
       if: inputs.enable-python-tools == 'true'
       uses: astral-sh/setup-uv@v5
-          
+
+    - name: Install GH CLI
+      uses: dev-hanz-ops/install-gh-cli-action@v0.2.1
+
     - name: Install Python tools
       if: inputs.enable-python-tools == 'true'
       run: |
@@ -213,6 +216,11 @@ runs:
           obo-grep.pl --help || echo "obo-grep.pl not available"
           obo-checkin.pl --help || echo "obo-checkin.pl not available"
         fi
+
+        # debug
+        ls /tmp/
+        ls /tmp/ai-input/
+        cat /tmp/ai-input/user-prompt.txt
 
         export PATH="${{ github.workspace }}/tools:$PATH"
         
