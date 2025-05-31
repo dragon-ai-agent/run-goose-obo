@@ -1,0 +1,231 @@
+name: 'Goose AI Responder for obo format'
+description: 'Responds to requests using Goose over obo files'
+inputs:
+  anthropic-api-key:
+    description: 'OpenAI API key for Goose (also for proxies)'
+    required: true
+  openai-api-key:
+    description: 'OpenAI API key for Goose (also for proxies)'
+    required: true
+  github-token:
+    description: 'GitHub token with appropriate permissions'
+    required: true
+  prompt:
+    description: 'The prompt/request to send to Claude'
+    required: true
+  user:
+    description: 'GitHub username making the request'
+    required: true
+  item-type:
+    description: 'Type of GitHub item (issue or pull_request)'
+    required: true
+  item-number:
+    description: 'GitHub issue or PR number'
+    required: true
+  controllers:
+    description: 'Formatted list of authorized controllers'
+    required: true
+  agent-name:
+    description: 'Name of the AI agent (for prompt context)'
+    required: false
+    default: 'dragon-ai-agent'
+  branch-prefix:
+    description: 'Prefix for branch names created by the agent'
+    required: false
+    default: 'ai_agent'
+  robot-version:
+    description: 'Version of ROBOT tool to install'
+    required: false
+    default: 'v1.9.7'
+  enable-robot:
+    description: 'Whether to install ROBOT'
+    required: false
+    default: 'true'
+  enable-obo-scripts:
+    description: 'Whether to install obo-scripts'
+    required: false
+    default: 'true'
+  enable-python-tools:
+    description: 'Whether to install Python tools (aurelian, jinja2-cli, etc.)'
+    required: false
+    default: 'true'
+  python-packages:
+    description: 'Additional Python packages to install (space-separated)'
+    required: false
+    default: 'aurelian jinja2-cli "wrapt>=1.17.2"'
+  claude-allowed-tools:
+    description: 'Allowed tools for Claude (JSON array format)'
+    required: false
+    default: '["Bash(git:*)", "Bash(gh:*)", "FileSystem(*)"]'
+  custom-prompt-template:
+    description: 'Custom prompt template (if provided, overrides default)'
+    required: false
+    default: ''
+
+outputs:
+  branch-name:
+    description: 'Name of the branch created (if any)'
+    value: ${{ steps.setup-env.outputs.branch-name }}
+  success:
+    description: 'Whether the action completed successfully'
+    value: ${{ steps.ai-response.outputs.success }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Configure goose
+      run: |
+        mkdir -p ~/.config/goose/
+        cp .config/goose/config.yaml ~/.config/goose
+      shell: bash
+    - name: Configure Git
+      run: |
+        git config --global user.name "${{ inputs.agent-name }}"
+        git config --global user.email "${{ inputs.agent-name }}[bot]@users.noreply.github.com"
+      shell: bash
+    
+    - name: Create tools directory
+      run: mkdir -p ${{ github.workspace }}/tools
+      shell: bash
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+
+    - name: Install Goose
+      run: "curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh | CONFIGURE=false bash"
+      shell: bash
+
+    - name: Cache ROBOT JAR files
+      if: inputs.enable-robot == 'true'
+      uses: actions/cache@v4
+      with:
+        path: ~/.jar-cache
+        key: ${{ runner.os }}-robot-${{ inputs.robot-version }}
+        restore-keys: ${{ runner.os }}-robot-
+
+    - name: Download ROBOT JAR if not cached
+      if: inputs.enable-robot == 'true'
+      run: |
+        mkdir -p ~/.jar-cache
+        if [ ! -f ~/.jar-cache/robot.jar ]; then
+          curl -L https://github.com/ontodev/robot/releases/download/${{ inputs.robot-version }}/robot.jar -o ~/.jar-cache/robot.jar
+        fi
+      shell: bash
+    
+    - name: Setup ROBOT tools
+      if: inputs.enable-robot == 'true'
+      run: |
+        cp ~/.jar-cache/robot.jar ${{ github.workspace }}/tools/robot.jar
+        curl -L https://raw.githubusercontent.com/ontodev/robot/${{ inputs.robot-version }}/bin/robot -o ${{ github.workspace }}/tools/robot
+        chmod +x ${{ github.workspace }}/tools/robot
+        ${{ github.workspace }}/tools/robot --help
+      shell: bash
+
+    - name: Add tools to PATH
+      run: |
+        echo "${{ github.workspace }}/tools" >> $GITHUB_PATH
+        ls -alt ${{ github.workspace }}
+        ls -alt ${{ github.workspace }}/tools
+      shell: bash
+
+    - name: Add obo-scripts to PATH
+      if: inputs.enable-obo-scripts == 'true'
+      run: |
+        git clone https://github.com/cmungall/obo-scripts.git ${{ github.workspace }}/tools/obo-scripts
+        echo "${{ github.workspace }}/tools/obo-scripts" >> $GITHUB_PATH
+      shell: bash
+
+    - name: Setup environment variables
+      id: setup-env
+      run: |
+        BRANCH_NAME="${{ inputs.branch-prefix }}_${{ inputs.item-number }}"
+        echo "BRANCH_NAME=$BRANCH_NAME" >> $GITHUB_ENV
+        echo "branch-name=$BRANCH_NAME" >> $GITHUB_OUTPUT
+        
+        # Safely write prompt to file
+        mkdir -p /tmp/ai-input
+        echo "${{ inputs.prompt }}" > /tmp/ai-input/user-prompt.txt
+      shell: bash
+      
+    - name: Set up API keys and tokens
+      run: |
+        echo "ANTHROPIC_API_KEY=${{ inputs.anthropic-api-key }}" >> $GITHUB_ENV
+        echo "OPENAI_API_KEY=${{ inputs.openai-api-key }}" >> $GITHUB_ENV
+        echo "GH_TOKEN=${{ inputs.github-token }}" >> $GITHUB_ENV
+        echo "LOGFIRE_SEND_TO_LOGFIRE=false" >> $GITHUB_ENV
+      shell: bash
+
+    - name: Install uv
+      if: inputs.enable-python-tools == 'true'
+      uses: astral-sh/setup-uv@v5
+          
+    - name: Install Python tools
+      if: inputs.enable-python-tools == 'true'
+      run: |
+        uv venv
+        source .venv/bin/activate
+        uv pip install ${{ inputs.python-packages }}
+      shell: bash
+        
+    - name: Create structured AI prompt
+      run: |
+        if [ -n "${{ inputs.custom-prompt-template }}" ]; then
+          # Use custom template if provided
+          echo "${{ inputs.custom-prompt-template }}" > /tmp/ai-input/ai_prompt.txt
+          # Replace placeholders in custom template
+          sed -i "s/{{agent-name}}/${{ inputs.agent-name }}/g" /tmp/ai-input/ai_prompt.txt
+          sed -i "s/{{user}}/${{ inputs.user }}/g" /tmp/ai-input/ai_prompt.txt
+          sed -i "s/{{item-type}}/${{ inputs.item-type }}/g" /tmp/ai-input/ai_prompt.txt
+          sed -i "s/{{item-number}}/${{ inputs.item-number }}/g" /tmp/ai-input/ai_prompt.txt
+          sed -i "s/{{controllers}}/${{ inputs.controllers }}/g" /tmp/ai-input/ai_prompt.txt
+        else
+          # Use default template
+          cat > /tmp/ai-input/ai_prompt.txt << EOL
+        You are @${{ inputs.agent-name }}.
+        You're responding to a request from or relayed by @${{ inputs.user }} on GitHub ${{ inputs.item-type }} #${{ inputs.item-number }}.
+        You only respond to requests from the following authorized controllers: ${{ inputs.controllers }}.
+
+        You should use \`gh\` to communicate with the user via the GitHub issue/ticket.
+        If instructed to modify files, you should make changes on a branch and submit a PR, communicating clearly and in
+        detail on the PR.
+
+        Always end by informing the user what you did (or were not able to do) with a message, either on an issue or a PR,
+        as appropriate.
+        
+        The request is below, enclosed in triple backticks:
+        \`\`\`
+        \$(cat /tmp/ai-input/user-prompt.txt)
+        \`\`\`
+
+        However, you should use \`gh\` to read the complete context of the request, and look at any linked issues or PRs
+        that provide additional context.
+        EOL
+        fi
+      shell: bash
+      
+    - name: Run Claude Code in headless mode
+      id: ai-response
+      run: |
+        # Verify tools are available (if enabled)
+        if [ "${{ inputs.obo-scripts }}" = "true" ]; then
+          obo-grep.pl --help || echo "obo-grep.pl not available"
+          obo-checkin.pl --help || echo "obo-checkin.pl not available"
+        fi
+
+        export PATH="${{ github.workspace }}/tools:$PATH"
+        
+        # Activate Python env if enabled
+        if [ "${{ inputs.enable-python-tools }}" = "true" ]; then
+          source .venv/bin/activate
+        fi
+
+        # Run Claude with proper permissions
+        if eval "goose -i /tmp/ai-input/ai_prompt.txt)"; then
+          echo "success=true" >> $GITHUB_OUTPUT
+        else
+          echo "success=false" >> $GITHUB_OUTPUT
+          exit 1
+        fi
+      shell: bash
