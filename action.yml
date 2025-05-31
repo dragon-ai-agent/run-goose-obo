@@ -222,7 +222,7 @@ runs:
         fi
 
         # Run Claude with proper permissions
-        if eval "goose -i /tmp/ai-input/ai_prompt.txt)"; then
+        if eval "goose -i /tmp/ai-input/ai_prompt.txt"; then
           echo "success=true" >> $GITHUB_OUTPUT
         else
           echo "success=false" >> $GITHUB_OUTPUT
