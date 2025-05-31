@@ -199,7 +199,7 @@ runs:
         
         The request is below, enclosed in triple backticks:
         \`\`\`
-        \$(cat /tmp/ai-input/user-prompt.txt)
+        $(cat /tmp/ai-input/user-prompt.txt)
         \`\`\`
 
         However, you should use \`gh\` to read the complete context of the request, and look at any linked issues or PRs
@@ -218,9 +218,16 @@ runs:
         fi
 
         # debug
+        echo "checking gh"
+        gh --help
+
+        echo "listing tmp dirs"
         ls /tmp/
         ls /tmp/ai-input/
         cat /tmp/ai-input/user-prompt.txt
+        echo "AI prompt:"
+        cat /tmp/ai-input/ai_prompt.txt
+        
 
         export PATH="${{ github.workspace }}/tools:$PATH"
         
